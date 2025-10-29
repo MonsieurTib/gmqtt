@@ -124,6 +124,13 @@ type WillProperties struct {
 	UserProperties         []UserProperty
 }
 
+type Publish struct {
+	Qos     QoS
+	Topic   string
+	Payload []byte
+	Retain  bool
+}
+
 type Client struct {
 	config        *ClientConfig
 	conn          net.Conn
@@ -244,6 +251,20 @@ func (c *Client) Connect(ctx context.Context) error {
 		c.close()
 		return ctx.Err()
 	}
+}
+
+func (c *Client) Publish(ctx context.Context, p Publish) error {
+	packet, err := protocol.NewPublish(protocol.PublishOptions{
+		Qos:     byte(p.Qos),
+		Topic:   p.Topic,
+		Payload: p.Payload,
+		Retain:  p.Retain,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = c.sendPacket(ctx, packet)
+	return err
 }
 
 func (c *Client) sendPacket(ctx context.Context, p protocol.Packet) (int, error) {

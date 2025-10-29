@@ -32,6 +32,7 @@ const (
 	PropertyContentType                     = 0x03
 	PropertyResponseTopic                   = 0x08
 	PropertyCorrelationData                 = 0x09
+	PropertySubscriptionIdentifier          = 0x0B
 	PropertySessionExpiryInterval           = 0x11
 	PropertyAssignedClientIdentifier        = 0x12
 	PropertyServerKeepAlive                 = 0x13
@@ -45,6 +46,7 @@ const (
 	PropertyReasonString                    = 0x1F
 	PropertyReceiveMaximum                  = 0x21
 	PropertyTopicAliasMaximum               = 0x22
+	PropertyTopicAlias                      = 0x23
 	PropertyMaximumQoS                      = 0x24
 	PropertyRetainAvailable                 = 0x25
 	PropertyUserProperty                    = 0x26
