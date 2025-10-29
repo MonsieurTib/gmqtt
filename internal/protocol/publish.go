@@ -3,6 +3,7 @@ package protocol
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -56,7 +57,7 @@ func NewPublish(opt PublishOptions) (*Publish, error) {
 	return publish, nil
 }
 
-func (p *Publish) Encode() ([]byte, error) {
+func (p *Publish) Encode() (net.Buffers, error) {
 	var buf bytes.Buffer
 	var header byte
 	if p.retain {
@@ -84,9 +85,7 @@ func (p *Publish) Encode() ([]byte, error) {
 	remainingLength := len(vHeader) + len(p.payload)
 
 	encodeVariableByteInteger(&buf, remainingLength)
-	buf.Write(vHeader)
-	buf.Write(p.payload)
-	return buf.Bytes(), nil
+	return net.Buffers{buf.Bytes(), vHeader, p.payload}, nil
 }
 
 func (p *Publish) encodeVariableHeader() ([]byte, error) {

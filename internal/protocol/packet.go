@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 )
 
 const (
@@ -61,7 +62,7 @@ type UserProperty struct {
 }
 
 type Packet interface {
-	Encode() ([]byte, error)
+	Encode() (net.Buffers, error)
 }
 
 // from https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901011

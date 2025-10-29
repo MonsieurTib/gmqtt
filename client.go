@@ -219,10 +219,9 @@ func (c *Client) Connect(ctx context.Context) error {
 		c.close()
 		return fmt.Errorf("failed to encode connect packet: %w", err)
 	}
-
-	if _, err := c.conn.Write(packet); err != nil {
-		c.close()
-		return fmt.Errorf("failed to write connect packet: %w", err)
+	_, err = packet.WriteTo(c.conn)
+	if err != nil {
+		return err
 	}
 
 	select {
@@ -243,7 +242,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		c.heartBeat.Start(ctx, c.config.KeepAlive)
 		p := &protocol.PingReq{}
 		if p, err := p.Encode(); err == nil {
-			c.conn.Write(p)
+			p.WriteTo(c.conn)
 			c.heartBeat.PacketSent()
 		}
 		return nil
@@ -263,41 +262,41 @@ func (c *Client) Publish(ctx context.Context, p Publish) error {
 	if err != nil {
 		return err
 	}
-	_, err = c.sendPacket(ctx, packet)
+	err = c.sendPacket(ctx, packet)
 	return err
 }
 
-func (c *Client) sendPacket(ctx context.Context, p protocol.Packet) (int, error) {
+func (c *Client) sendPacket(ctx context.Context, p protocol.Packet) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.conn == nil {
-		return 0, fmt.Errorf("connection is nil")
+		return fmt.Errorf("connection is nil")
 	}
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := c.conn.SetWriteDeadline(deadline); err != nil {
-			return 0, fmt.Errorf("failed to set write deadline: %w", err)
+			return fmt.Errorf("failed to set write deadline: %w", err)
 		}
 	} else if c.config.Timeout > 0 {
 		if err := c.conn.SetWriteDeadline(time.Now().Add(c.config.Timeout)); err != nil {
-			return 0, fmt.Errorf("failed to set write deadline: %w", err)
+			return fmt.Errorf("failed to set write deadline: %w", err)
 		}
 	}
 	defer c.conn.SetWriteDeadline(time.Time{})
 
 	data, err := p.Encode()
 	if err != nil {
-		return 0, fmt.Errorf("failed to encode packet: %w", err)
+		return fmt.Errorf("failed to encode packet: %w", err)
 	}
 
-	n, err := c.conn.Write(data)
+	_, err = data.WriteTo(c.conn)
 	if err != nil {
-		return n, fmt.Errorf("failed to write packet: %w", err)
+		return err
 	}
 	c.heartBeat.PacketSent()
 
-	return n, nil
+	return nil
 }
 
 func (c *Client) readLoop(ctx context.Context) {
@@ -412,7 +411,7 @@ func (c *Client) Disconnect(ctx context.Context) error {
 	if err != nil {
 		c.config.Logger.Error("failed to encode disconnect packet", "err", err)
 	} else {
-		if _, err = c.conn.Write(packet); err != nil {
+		if _, err = packet.WriteTo(c.conn); err != nil {
 			c.config.Logger.Error("failed to write disconnect packet", "err", err)
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"log/slog"
+	"net"
 )
 
 const (
@@ -92,7 +93,7 @@ func NewConnect(opt ConnectOptions) *Connect {
 	return c
 }
 
-func (c *Connect) Encode() ([]byte, error) {
+func (c *Connect) Encode() (net.Buffers, error) {
 	var buf bytes.Buffer
 	buf.WriteByte(TypeConnect << 4)
 
@@ -108,10 +109,7 @@ func (c *Connect) Encode() ([]byte, error) {
 
 	remainingLength := len(payload) + len(header)
 	encodeVariableByteInteger(&buf, remainingLength)
-	buf.Write(header)
-	buf.Write(payload)
-
-	return buf.Bytes(), nil
+	return net.Buffers{buf.Bytes(), header, payload}, nil
 }
 
 func (c *Connect) encodeConnectFlags() byte {

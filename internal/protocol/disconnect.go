@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
 )
 
 type Disconnect struct {
@@ -57,7 +58,7 @@ func NewDisconnect(reasonCode byte, properties *DisconnectProperties) *Disconnec
 	}
 }
 
-func (c *Disconnect) Encode() ([]byte, error) {
+func (c *Disconnect) Encode() (net.Buffers, error) {
 	var buf bytes.Buffer
 	buf.WriteByte(TypeDisconnect << 4)
 
@@ -68,8 +69,7 @@ func (c *Disconnect) Encode() ([]byte, error) {
 
 	encodeVariableByteInteger(&buf, len(header))
 	buf.Write(header)
-
-	return buf.Bytes(), nil
+	return net.Buffers{buf.Bytes(), header}, nil
 }
 
 func (c *Disconnect) encodeVariableHeader() ([]byte, error) {

@@ -69,7 +69,7 @@ func main() {
 	client.Publish(ctx, gmqtt.Publish{
 		Topic:   "hello/world",
 		Qos:     gmqtt.QoSAtMostOnce,
-		Payload: []byte("hello from example"),
+		Payload: []byte("hello from example !!"),
 		Retain:  true,
 	})
 	time.Sleep(60 * time.Second)

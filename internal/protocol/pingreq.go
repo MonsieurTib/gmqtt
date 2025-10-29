@@ -1,13 +1,16 @@
 package protocol
 
-import "bytes"
+import (
+	"bytes"
+	"net"
+)
 
 type PingReq struct{}
 
-func (p *PingReq) Encode() ([]byte, error) {
+func (p *PingReq) Encode() (net.Buffers, error) {
 	var buf bytes.Buffer
 	buf.WriteByte(TypePingReq << 4)
 	encodeVariableByteInteger(&buf, 0)
 
-	return buf.Bytes(), nil
+	return net.Buffers{buf.Bytes()}, nil
 }
