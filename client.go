@@ -385,7 +385,7 @@ func (c *Client) readLoop(ctx context.Context) {
 					c.config.OnConnectionLost(err)
 				}
 
-				c.close()
+				c.safeClose()
 				return
 			}
 			c.heartBeat.PacketReceived()
@@ -449,20 +449,20 @@ func (c *Client) readLoop(ctx context.Context) {
 	}
 }
 
+// close does not lock c.mu because all callers (Connect, safeClose) already hold the lock
 func (c *Client) close() {
-	c.closeWithCleanup(false)
-}
-
-func (c *Client) closeWithCleanup(cleanupSession bool) {
 	if c.cancelFunc != nil {
 		c.cancelFunc()
 		c.cancelFunc = nil
 	}
 	c.heartBeat.Stop()
 
-	if cleanupSession && c.session != nil {
-		c.session.cleanup()
-		c.session = nil
+	if c.session != nil {
+		if c.config.ConnectProperties == nil ||
+			c.config.ConnectProperties.SessionExpiryInterval == 0 {
+			c.session.cleanup()
+			c.session = nil
+		}
 	}
 
 	if c.conn != nil {
@@ -470,6 +470,7 @@ func (c *Client) closeWithCleanup(cleanupSession bool) {
 			c.config.Logger.Error("failed to close connection", "err", err)
 		}
 	}
+
 	c.conn = nil
 	c.connected = false
 }
@@ -498,17 +499,11 @@ func (c *Client) Disconnect(ctx context.Context) error {
 		}
 	}
 
-	// Cleanup session only if SessionExpiryInterval is 0 (session expires immediately)
-	// If SessionExpiryInterval > 0, preserve the session for potential reconnection
-	cleanupSession := c.config.ConnectProperties == nil ||
-		c.config.ConnectProperties.SessionExpiryInterval == 0
 	c.mu.Unlock()
 
 	c.wg.Wait()
 
-	c.mu.Lock()
-	c.closeWithCleanup(cleanupSession)
-	c.mu.Unlock()
+	c.safeClose()
 
 	return nil
 }
