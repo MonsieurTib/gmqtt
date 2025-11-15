@@ -304,6 +304,364 @@ func TestReconnection(t *testing.T) {
 	}
 }
 
+func TestPublish(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	ctx := context.Background()
+	container, err := setupEMQXContainer(ctx)
+	if err != nil {
+		t.Fatalf("Failed to setup EMQX container: %v", err)
+	}
+	defer func() {
+		_ = container.Terminate(ctx)
+	}()
+
+	tests := []struct {
+		name        string
+		qos         QoS
+		topic       string
+		payload     []byte
+		retain      bool
+		expectError bool
+		expectResp  bool
+	}{
+		{
+			name:        "qos0_simple",
+			qos:         QoSAtMostOnce,
+			topic:       "test/qos0/simple",
+			payload:     []byte("qos0 message"),
+			retain:      false,
+			expectError: false,
+			expectResp:  false,
+		},
+		{
+			name:        "qos1_simple",
+			qos:         QoSAtLeastOnce,
+			topic:       "test/qos1/simple",
+			payload:     []byte("qos1 message"),
+			retain:      false,
+			expectError: false,
+			expectResp:  true,
+		},
+		{
+			name:        "qos1_with_retain",
+			qos:         QoSAtLeastOnce,
+			topic:       "test/qos1/retained",
+			payload:     []byte("retained message"),
+			retain:      true,
+			expectError: false,
+			expectResp:  true,
+		},
+		{
+			name:        "qos0_empty_payload",
+			qos:         QoSAtMostOnce,
+			topic:       "test/qos0/empty",
+			payload:     []byte{},
+			retain:      false,
+			expectError: false,
+			expectResp:  false,
+		},
+		{
+			name:        "qos1_large_payload",
+			qos:         QoSAtLeastOnce,
+			topic:       "test/qos1/large",
+			payload:     make([]byte, 1024),
+			retain:      false,
+			expectError: false,
+			expectResp:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &ClientConfig{
+				Broker:     container.MQTTURI,
+				ClientID:   fmt.Sprintf("test-publish-%s", tt.name),
+				KeepAlive:  60 * time.Second,
+				CleanStart: true,
+			}
+
+			client, err := NewClient(config)
+			if err != nil {
+				t.Fatalf("Failed to create client: %v", err)
+			}
+
+			connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+
+			if err := client.Connect(connectCtx); err != nil {
+				t.Fatalf("Failed to connect: %v", err)
+			}
+			defer client.Disconnect(ctx)
+
+			publishCtx, publishCancel := context.WithTimeout(ctx, 5*time.Second)
+			defer publishCancel()
+
+			resp, err := client.Publish(publishCtx, Publish{
+				Topic:   tt.topic,
+				Qos:     tt.qos,
+				Payload: tt.payload,
+				Retain:  tt.retain,
+			})
+
+			if tt.expectError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Expected no error but got: %v", err)
+			}
+
+			if tt.expectResp && resp == nil {
+				t.Error("Expected response but got nil")
+			}
+			if !tt.expectResp && resp != nil {
+				t.Errorf("Expected no response but got: %v", resp)
+			}
+		})
+	}
+}
+
+func TestPublishConcurrent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	ctx := context.Background()
+	container, err := setupEMQXContainer(ctx)
+	if err != nil {
+		t.Fatalf("Failed to setup EMQX container: %v", err)
+	}
+	defer func() {
+		_ = container.Terminate(ctx)
+	}()
+
+	config := &ClientConfig{
+		Broker:     container.MQTTURI,
+		ClientID:   "test-concurrent-publisher",
+		KeepAlive:  60 * time.Second,
+		CleanStart: true,
+	}
+
+	client, err := NewClient(config)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	if err := client.Connect(connectCtx); err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer client.Disconnect(ctx)
+
+	numMessages := 20
+	done := make(chan error, numMessages)
+
+	for i := range numMessages {
+		go func(msgNum int) {
+			publishCtx, publishCancel := context.WithTimeout(ctx, 10*time.Second)
+			defer publishCancel()
+
+			_, err := client.Publish(publishCtx, Publish{
+				Topic:   fmt.Sprintf("test/concurrent/%d", msgNum),
+				Qos:     QoSAtLeastOnce,
+				Payload: fmt.Appendf(nil, "message %d", msgNum),
+			})
+			done <- err
+		}(i)
+	}
+
+	failed := 0
+	for i := range numMessages {
+		if err := <-done; err != nil {
+			t.Errorf("Publish %d failed: %v", i, err)
+			failed++
+		}
+	}
+
+	if failed > 0 {
+		t.Errorf("%d out of %d concurrent publishes failed", failed, numMessages)
+	}
+}
+
+func BenchmarkPublish(b *testing.B) {
+	ctx := context.Background()
+	container, err := setupEMQXContainer(ctx)
+	if err != nil {
+		b.Fatalf("Failed to setup EMQX container: %v", err)
+	}
+	defer func() {
+		_ = container.Terminate(ctx)
+	}()
+
+	benchmarks := []struct {
+		name        string
+		qos         QoS
+		payloadSize int
+	}{
+		{
+			name:        "qos0_small_payload",
+			qos:         QoSAtMostOnce,
+			payloadSize: 100,
+		},
+		{
+			name:        "qos0_medium_payload",
+			qos:         QoSAtMostOnce,
+			payloadSize: 1024,
+		},
+		{
+			name:        "qos0_large_payload",
+			qos:         QoSAtMostOnce,
+			payloadSize: 10240,
+		},
+		{
+			name:        "qos1_small_payload",
+			qos:         QoSAtLeastOnce,
+			payloadSize: 100,
+		},
+		{
+			name:        "qos1_medium_payload",
+			qos:         QoSAtLeastOnce,
+			payloadSize: 1024,
+		},
+		{
+			name:        "qos1_large_payload",
+			qos:         QoSAtLeastOnce,
+			payloadSize: 10240,
+		},
+	}
+
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			config := &ClientConfig{
+				Broker:     container.MQTTURI,
+				ClientID:   fmt.Sprintf("bench-%s", bm.name),
+				KeepAlive:  60 * time.Second,
+				CleanStart: true,
+			}
+
+			client, err := NewClient(config)
+			if err != nil {
+				b.Fatalf("Failed to create client: %v", err)
+			}
+
+			connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+
+			if err := client.Connect(connectCtx); err != nil {
+				b.Fatalf("Failed to connect: %v", err)
+			}
+			defer client.Disconnect(ctx)
+
+			payload := make([]byte, bm.payloadSize)
+			for i := range payload {
+				payload[i] = byte(i % 256)
+			}
+
+			b.ResetTimer()
+			for i := 0; b.Loop(); i++ {
+				publishCtx, publishCancel := context.WithTimeout(ctx, 5*time.Second)
+				_, err := client.Publish(publishCtx, Publish{
+					Topic:   fmt.Sprintf("bench/test/%d", i),
+					Qos:     bm.qos,
+					Payload: payload,
+				})
+				publishCancel()
+
+				if err != nil {
+					b.Fatalf("Publish failed at iteration %d: %v", i, err)
+				}
+			}
+			b.StopTimer()
+		})
+	}
+}
+
+func BenchmarkPublishParallel(b *testing.B) {
+	ctx := context.Background()
+	container, err := setupEMQXContainer(ctx)
+	if err != nil {
+		b.Fatalf("Failed to setup EMQX container: %v", err)
+	}
+	defer func() {
+		_ = container.Terminate(ctx)
+	}()
+
+	benchmarks := []struct {
+		name        string
+		qos         QoS
+		payloadSize int
+	}{
+		{
+			name:        "qos0_small_payload",
+			qos:         QoSAtMostOnce,
+			payloadSize: 100,
+		},
+		{
+			name:        "qos1_small_payload",
+			qos:         QoSAtLeastOnce,
+			payloadSize: 100,
+		},
+		{
+			name:        "qos1_medium_payload",
+			qos:         QoSAtLeastOnce,
+			payloadSize: 1024,
+		},
+	}
+
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			config := &ClientConfig{
+				Broker:     container.MQTTURI,
+				ClientID:   fmt.Sprintf("bench-parallel-%s", bm.name),
+				KeepAlive:  60 * time.Second,
+				CleanStart: true,
+			}
+
+			client, err := NewClient(config)
+			if err != nil {
+				b.Fatalf("Failed to create client: %v", err)
+			}
+
+			connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+
+			if err := client.Connect(connectCtx); err != nil {
+				b.Fatalf("Failed to connect: %v", err)
+			}
+			defer client.Disconnect(ctx)
+
+			payload := make([]byte, bm.payloadSize)
+			for i := range payload {
+				payload[i] = byte(i % 256)
+			}
+
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				i := 0
+				for pb.Next() {
+					publishCtx, publishCancel := context.WithTimeout(ctx, 5*time.Second)
+					_, err := client.Publish(publishCtx, Publish{
+						Topic:   fmt.Sprintf("bench/parallel/%d", i),
+						Qos:     bm.qos,
+						Payload: payload,
+					})
+					publishCancel()
+
+					if err != nil {
+						b.Errorf("Publish failed: %v", err)
+					}
+					i++
+				}
+			})
+			b.StopTimer()
+		})
+	}
+}
+
 func setupProtectedEMQXContainer(ctx context.Context) (*MQTTContainer, error) {
 	_, err := testcontainers.GenericNetwork(ctx, testcontainers.GenericNetworkRequest{
 		NetworkRequest: testcontainers.NetworkRequest{

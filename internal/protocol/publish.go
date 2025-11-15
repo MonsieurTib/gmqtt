@@ -21,13 +21,14 @@ type PublishOptions struct {
 	Payload           []byte
 }
 type Publish struct {
-	packetID          *uint16
+	PacketID          *uint16
 	qos               byte
 	retain            bool
 	duplicate         bool
 	topic             string
 	publishProperties *PublishProperties
 	payload           []byte
+	Order             uint32
 }
 
 type PublishProperties struct {
@@ -43,7 +44,7 @@ type PublishProperties struct {
 
 func NewPublish(opt PublishOptions) (*Publish, error) {
 	publish := &Publish{
-		packetID:          opt.PacketID,
+		PacketID:          opt.PacketID,
 		qos:               opt.Qos,
 		retain:            opt.Retain,
 		topic:             opt.Topic,
@@ -57,20 +58,20 @@ func NewPublish(opt PublishOptions) (*Publish, error) {
 	return publish, nil
 }
 
+func (p *Publish) Topic() string {
+	return p.topic
+}
+func (p *Publish) MarkAsDuplicated() {
+	p.duplicate = true
+}
+
 func (p *Publish) Encode() (net.Buffers, error) {
 	var buf bytes.Buffer
 	var header byte
 	if p.retain {
 		header |= FlagRetain
 	}
-	switch p.qos {
-	case 0:
-		header |= 0x00 << 2
-	case 1:
-		header |= 0x01 << 2
-	case 2:
-		header |= 0x02 << 2
-	}
+	header |= p.qos << 1
 	if p.duplicate {
 		header |= FlagDup
 	}
@@ -94,8 +95,8 @@ func (p *Publish) encodeVariableHeader() ([]byte, error) {
 		return nil, err
 	}
 
-	if p.packetID != nil {
-		if err := encodeUint16(&buf, *p.packetID); err != nil {
+	if p.PacketID != nil {
+		if err := encodeUint16(&buf, *p.PacketID); err != nil {
 			return nil, err
 		}
 	}

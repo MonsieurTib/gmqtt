@@ -17,7 +17,7 @@ func main() {
 	config := &gmqtt.ClientConfig{
 		Broker:    "localhost:1883",
 		ClientID:  "example-client",
-		KeepAlive: 5 * time.Second,
+		KeepAlive: 30 * time.Second,
 		Logger: slog.New(
 			slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}),
 		),
@@ -69,9 +69,22 @@ func main() {
 	client.Publish(ctx, gmqtt.Publish{
 		Topic:   "hello/world",
 		Qos:     gmqtt.QoSAtMostOnce,
-		Payload: []byte("hello from example !!"),
+		Payload: []byte("hello from example qos0 and retained"),
 		Retain:  true,
 	})
+
+	response, err := client.Publish(ctx, gmqtt.Publish{
+		Topic:   "hello/world",
+		Qos:     gmqtt.QoSAtLeastOnce,
+		Payload: []byte("hello from example qos1 and NOT retained"),
+	})
+
+	if err != nil {
+		log.Printf("Failed to publish: %v", err)
+	} else {
+		log.Printf("Published successfully: %v", response)
+	}
+
 	time.Sleep(60 * time.Second)
 	fmt.Println("Disconnecting")
 	_ = client.Disconnect(ctx)

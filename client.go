@@ -140,6 +140,7 @@ type Client struct {
 	cancelFunc    context.CancelFunc
 	connected     bool
 	heartBeat     *HeartBeat
+	session       *session
 }
 
 func NewClient(config *ClientConfig) (*Client, error) {
@@ -148,6 +149,10 @@ func NewClient(config *ClientConfig) (*Client, error) {
 	}
 
 	config.setDefaults()
+
+	if config.ConnectProperties == nil {
+		config.ConnectProperties = &ConnectProperties{}
+	}
 
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid client configuration: %w", err)
@@ -233,13 +238,50 @@ func (c *Client) Connect(ctx context.Context) error {
 			}
 			return fmt.Errorf("connection refused: unknown reason code 0x%02X", connack.ReasonCode)
 		}
-		c.config.Logger.Info("connection accepted", "connack", connack)
+		c.config.Logger.Info("connection accepted",
+			"session_present", connack.SessionPresent,
+			"connack", connack)
 		c.connected = true
+
 		if connack.Properties.ServerKeepAlive != nil {
 			c.config.KeepAlive = time.Duration(*connack.Properties.ServerKeepAlive) * time.Second
 		}
+		if connack.Properties.ReceiveMaximum != nil {
+			c.config.ConnectProperties.ReceiveMaximum = *connack.Properties.ReceiveMaximum
+		} else {
+			c.config.ConnectProperties.ReceiveMaximum = 65535
+		}
+
+		if connack.SessionPresent && c.session != nil {
+			// Restoring session and Resend all inflight messages with DUP flag
+			inflightMessages := c.session.getInflightMessages()
+			c.config.Logger.Info("resuming existing session",
+				"inflight_count", len(inflightMessages))
+
+			if len(inflightMessages) > 0 {
+				for _, msg := range inflightMessages {
+					msg.MarkAsDuplicated()
+					c.config.Logger.Debug("resending inflightMap message",
+						"packet_id", *msg.PacketID,
+						"topic", msg.Topic())
+
+					if err := c.sendPacket(ctx, msg); err != nil {
+						c.config.Logger.Error("failed to resend inflightMap message",
+							"packet_id", *msg.PacketID,
+							"err", err)
+					}
+				}
+			}
+		} else {
+			if c.session != nil {
+				c.config.Logger.Info("discarding previous session due to SessionPresent=false")
+				c.session.cleanup()
+			}
+			c.session = newSession(c.config.ConnectProperties.ReceiveMaximum, c.config.Logger)
+		}
 
 		c.heartBeat.Start(ctx, c.config.KeepAlive)
+
 		p := &protocol.PingReq{}
 		if p, err := p.Encode(); err == nil {
 			p.WriteTo(c.conn)
@@ -252,7 +294,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 }
 
-func (c *Client) Publish(ctx context.Context, p Publish) error {
+func (c *Client) Publish(ctx context.Context, p Publish) (*protocol.Packet, error) {
 	packet, err := protocol.NewPublish(protocol.PublishOptions{
 		Qos:     byte(p.Qos),
 		Topic:   p.Topic,
@@ -260,10 +302,30 @@ func (c *Client) Publish(ctx context.Context, p Publish) error {
 		Retain:  p.Retain,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	err = c.sendPacket(ctx, packet)
-	return err
+
+	if p.Qos == QoSAtMostOnce {
+		err = c.sendPacket(ctx, packet)
+		return nil, err
+	}
+
+	packetID, respChan, err := c.session.storePublish(packet)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = c.sendPacket(ctx, packet); err != nil {
+		c.session.remove(packetID)
+		return nil, err
+	}
+
+	select {
+	case resp := <-respChan:
+		return &resp, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("publish cancelled for packetID %d", packetID)
+	}
 }
 
 func (c *Client) sendPacket(ctx context.Context, p protocol.Packet) error {
@@ -369,6 +431,16 @@ func (c *Client) readLoop(ctx context.Context) {
 				}
 				c.safeClose()
 				return
+			case protocol.TypePubAck:
+				pubAck := &protocol.PubAck{}
+				err := pubAck.Decode(c.conn)
+				if err != nil {
+					c.config.Logger.Error("failed to decode pubAck packet", "err", err)
+					return
+				}
+				c.config.Logger.Debug("PubAck received", "packet_id", pubAck.PacketID)
+				c.session.ack(pubAck.PacketID, pubAck)
+
 			default:
 				// TODO: Handle other packet types
 				c.config.Logger.Warn("unsupported packet type", "type", packetType[0]>>4)
@@ -378,11 +450,21 @@ func (c *Client) readLoop(ctx context.Context) {
 }
 
 func (c *Client) close() {
+	c.closeWithCleanup(false)
+}
+
+func (c *Client) closeWithCleanup(cleanupSession bool) {
 	if c.cancelFunc != nil {
 		c.cancelFunc()
 		c.cancelFunc = nil
 	}
 	c.heartBeat.Stop()
+
+	if cleanupSession && c.session != nil {
+		c.session.cleanup()
+		c.session = nil
+	}
+
 	if c.conn != nil {
 		if err := c.conn.Close(); err != nil {
 			c.config.Logger.Error("failed to close connection", "err", err)
@@ -415,10 +497,18 @@ func (c *Client) Disconnect(ctx context.Context) error {
 			c.config.Logger.Error("failed to write disconnect packet", "err", err)
 		}
 	}
+
+	// Cleanup session only if SessionExpiryInterval is 0 (session expires immediately)
+	// If SessionExpiryInterval > 0, preserve the session for potential reconnection
+	cleanupSession := c.config.ConnectProperties == nil ||
+		c.config.ConnectProperties.SessionExpiryInterval == 0
 	c.mu.Unlock()
 
 	c.wg.Wait()
-	c.safeClose()
+
+	c.mu.Lock()
+	c.closeWithCleanup(cleanupSession)
+	c.mu.Unlock()
 
 	return nil
 }
