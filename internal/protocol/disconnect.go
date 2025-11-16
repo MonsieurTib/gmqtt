@@ -68,7 +68,7 @@ func (c *Disconnect) Encode() (net.Buffers, error) {
 	}
 
 	encodeVariableByteInteger(&buf, len(header))
-	buf.Write(header)
+
 	return net.Buffers{buf.Bytes(), header}, nil
 }
 
