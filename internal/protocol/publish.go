@@ -12,8 +12,20 @@ const (
 	FlagDup    = 0x08
 )
 
+const (
+	PubAckSuccess                     = 0x00
+	PubAckNoMatchingSubscriber        = 0x10
+	PubAckUnspecifiedError            = 0x80
+	PubAckImplementationSpecificError = 0x83
+	PubAckNotAuthorized               = 0x87
+	PubAckTopicNameInvalid            = 0x90
+	PubAckPacketIdentifierInUse       = 0x91
+	PubAckPacketIdentifierNotFound    = 0x92
+	PubAckQuotaExceed                 = 0x97
+	PubAckPayloadFormatInvalid        = 0x99
+)
+
 type PublishOptions struct {
-	PacketID          *uint16
 	Qos               byte
 	Retain            bool
 	Topic             string
@@ -21,14 +33,14 @@ type PublishOptions struct {
 	Payload           []byte
 }
 type Publish struct {
-	PacketID          *uint16
+	packetID          *uint16
 	qos               byte
 	retain            bool
 	duplicate         bool
 	topic             string
 	publishProperties *PublishProperties
 	payload           []byte
-	Order             uint32
+	acknowledgements  map[string]string
 }
 
 type PublishProperties struct {
@@ -44,7 +56,6 @@ type PublishProperties struct {
 
 func NewPublish(opt PublishOptions) (*Publish, error) {
 	publish := &Publish{
-		PacketID:          opt.PacketID,
 		qos:               opt.Qos,
 		retain:            opt.Retain,
 		topic:             opt.Topic,
@@ -58,9 +69,18 @@ func NewPublish(opt PublishOptions) (*Publish, error) {
 	return publish, nil
 }
 
+func (p *Publish) GetPacketID() uint16 {
+	return *p.packetID
+}
+
+func (p *Publish) SetPacketID(packetID uint16) {
+	p.packetID = &packetID
+}
+
 func (p *Publish) Topic() string {
 	return p.topic
 }
+
 func (p *Publish) MarkAsDuplicated() {
 	p.duplicate = true
 }
@@ -95,8 +115,8 @@ func (p *Publish) encodeVariableHeader() ([]byte, error) {
 		return nil, err
 	}
 
-	if p.PacketID != nil {
-		if err := encodeUint16(&buf, *p.PacketID); err != nil {
+	if p.packetID != nil {
+		if err := encodeUint16(&buf, *p.packetID); err != nil {
 			return nil, err
 		}
 	}

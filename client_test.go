@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -372,6 +373,24 @@ func TestPublish(t *testing.T) {
 			expectError: false,
 			expectResp:  true,
 		},
+		{
+			name:        "qos2_simple",
+			qos:         QoSExactlyOnce,
+			topic:       "test/qos2/simple",
+			payload:     []byte("qos2 message"),
+			retain:      false,
+			expectError: false,
+			expectResp:  true,
+		},
+		{
+			name:        "qos2_with_retain",
+			qos:         QoSExactlyOnce,
+			topic:       "test/qos2/retained",
+			payload:     []byte("retained message"),
+			retain:      true,
+			expectError: false,
+			expectResp:  true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -381,6 +400,7 @@ func TestPublish(t *testing.T) {
 				ClientID:   fmt.Sprintf("test-publish-%s", tt.name),
 				KeepAlive:  60 * time.Second,
 				CleanStart: true,
+				Logger:     slog.Default(),
 			}
 
 			client, err := NewClient(config)

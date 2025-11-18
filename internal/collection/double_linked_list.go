@@ -3,11 +3,19 @@ package collection
 type Node[T any] struct {
 	data     T
 	previous *Node[T]
-	Next     *Node[T]
+	next     *Node[T]
 }
 
 func (n *Node[T]) Data() T {
 	return n.data
+}
+
+func (n *Node[T]) SetData(value T) {
+	n.data = value
+}
+
+func (n *Node[T]) Next() *Node[T] {
+	return n.next
 }
 
 type DoubleLinkedList[T any] struct {
@@ -22,7 +30,7 @@ func (d *DoubleLinkedList[T]) Add(value T) *Node[T] {
 		d.Head, d.tail = n, n
 	} else {
 		n.previous = d.tail
-		d.tail.Next = n
+		d.tail.next = n
 		d.tail = n
 	}
 
@@ -35,17 +43,17 @@ func (d *DoubleLinkedList[T]) Remove(n *Node[T]) {
 		return
 	}
 	if n.previous != nil {
-		n.previous.Next = n.Next
+		n.previous.next = n.next
 	} else {
-		d.Head = n.Next
+		d.Head = n.next
 	}
-	if n.Next != nil {
-		n.Next.previous = n.previous
+	if n.next != nil {
+		n.next.previous = n.previous
 	} else {
 		d.tail = n.previous
 	}
 
-	n.previous, n.Next = nil, nil
+	n.previous, n.next = nil, nil
 	d.count--
 }
 

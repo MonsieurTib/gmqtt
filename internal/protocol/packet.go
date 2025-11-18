@@ -57,12 +57,22 @@ const (
 	PropertySharedSubscriptionAvailable     = 0x2A
 )
 
+const (
+	PubQosStepSuccess          = 0x00
+	PubQosStepPackedIDNotFound = 0x92
+)
+
 type UserProperty struct {
 	Key, Value string
 }
 
 type Packet interface {
 	Encode() (net.Buffers, error)
+}
+
+type PubPacket interface {
+	GetPacketID() uint16
+	SetPacketID(packetID uint16)
 }
 
 // from https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901011

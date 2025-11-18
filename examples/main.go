@@ -85,6 +85,18 @@ func main() {
 		log.Printf("Published successfully: %v", response)
 	}
 
+	response, err = client.Publish(ctx, gmqtt.Publish{
+		Topic:   "hello/world",
+		Qos:     gmqtt.QoSExactlyOnce,
+		Payload: []byte("hello from example qos2 and NOT retained"),
+	})
+
+	if err != nil {
+		log.Printf("Failed to publish: %v", err)
+	} else {
+		log.Printf("Published successfully: %v", response)
+	}
+
 	time.Sleep(60 * time.Second)
 	fmt.Println("Disconnecting")
 	_ = client.Disconnect(ctx)

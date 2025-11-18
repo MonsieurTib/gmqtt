@@ -260,15 +260,27 @@ func (c *Client) Connect(ctx context.Context) error {
 
 			if len(inflightMessages) > 0 {
 				for _, msg := range inflightMessages {
-					msg.MarkAsDuplicated()
-					c.config.Logger.Debug("resending inflightMap message",
-						"packet_id", *msg.PacketID,
-						"topic", msg.Topic())
+					switch p := msg.(type) {
+					case *protocol.Publish:
+						p.MarkAsDuplicated()
+						c.config.Logger.Debug("resending inflight message",
+							"packetID", p.GetPacketID(),
+							"topic", p.Topic())
 
-					if err := c.sendPacket(ctx, msg); err != nil {
-						c.config.Logger.Error("failed to resend inflightMap message",
-							"packet_id", *msg.PacketID,
-							"err", err)
+						if err := c.sendPacket(ctx, p); err != nil {
+							c.config.Logger.Error("failed to resend inflight message",
+								"packetID", p.GetPacketID(),
+								"err", err)
+						}
+					case *protocol.PubRel:
+						c.config.Logger.Debug("resending pubrel message",
+							"packetID", p.GetPacketID())
+
+						if err := c.sendPacket(ctx, p); err != nil {
+							c.config.Logger.Error("failed to resend pubrel message",
+								"packetID", p.GetPacketID(),
+								"err", err)
+						}
 					}
 				}
 			}
@@ -294,7 +306,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 }
 
-func (c *Client) Publish(ctx context.Context, p Publish) (*protocol.Packet, error) {
+func (c *Client) Publish(ctx context.Context, p Publish) (*protocol.AckPacket, error) {
 	packet, err := protocol.NewPublish(protocol.PublishOptions{
 		Qos:     byte(p.Qos),
 		Topic:   p.Topic,
@@ -314,6 +326,7 @@ func (c *Client) Publish(ctx context.Context, p Publish) (*protocol.Packet, erro
 	if err != nil {
 		return nil, err
 	}
+	c.config.Logger.Info("Publish stored", "packetID", packetID)
 
 	if err = c.sendPacket(ctx, packet); err != nil {
 		c.session.remove(packetID)
@@ -322,8 +335,11 @@ func (c *Client) Publish(ctx context.Context, p Publish) (*protocol.Packet, erro
 
 	select {
 	case resp := <-respChan:
-		return &resp, nil
+		return resp, nil
 	case <-ctx.Done():
+		if c.session != nil {
+			c.session.remove(packetID)
+		}
 		return nil, fmt.Errorf("publish cancelled for packetID %d", packetID)
 	}
 }
@@ -432,15 +448,43 @@ func (c *Client) readLoop(ctx context.Context) {
 				c.safeClose()
 				return
 			case protocol.TypePubAck:
-				pubAck := &protocol.PubAck{}
+				pubAck := &protocol.AckPacket{}
 				err := pubAck.Decode(c.conn)
 				if err != nil {
 					c.config.Logger.Error("failed to decode pubAck packet", "err", err)
 					return
 				}
-				c.config.Logger.Debug("PubAck received", "packet_id", pubAck.PacketID)
+				c.config.Logger.Info("PubAck received", "packetID", pubAck.PacketID)
 				c.session.ack(pubAck.PacketID, pubAck)
+			case protocol.TypePubRec:
+				pubRec := &protocol.PubRec{}
+				err := pubRec.Decode(c.conn)
+				if err != nil {
+					c.config.Logger.Error("failed to decode pubRec packet", "err", err)
+					return
+				}
+				c.config.Logger.Debug("PubRec received", "packetID", pubRec.PacketID)
 
+				relReasonCode := protocol.PubQosStepSuccess
+				pubRel, err := protocol.NewPubRel(pubRec.PacketID, byte(relReasonCode), nil)
+				if err != nil {
+					c.config.Logger.Error("failed to create pubrel", "err", err)
+					return
+				}
+
+				if found := c.session.rec(pubRec.PacketID, pubRel); !found {
+					pubRel.ReasonCode = protocol.PubQosStepPackedIDNotFound
+				}
+				c.sendPacket(ctx, pubRel)
+			case protocol.TypePubComp:
+				pubComp := &protocol.AckPacket{}
+				err := pubComp.Decode(c.conn)
+				if err != nil {
+					c.config.Logger.Error("failed to decode pubComp packet", "err", err)
+					return
+				}
+				c.config.Logger.Debug("PubComp received", "packetID", pubComp.PacketID)
+				c.session.ack(pubComp.PacketID, pubComp)
 			default:
 				// TODO: Handle other packet types
 				c.config.Logger.Warn("unsupported packet type", "type", packetType[0]>>4)
