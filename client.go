@@ -131,6 +131,11 @@ type Publish struct {
 	Retain  bool
 }
 
+type PublishResponse struct {
+	ReasonCode   byte
+	ReasonString string
+}
+
 type Client struct {
 	config        *ClientConfig
 	conn          net.Conn
@@ -306,7 +311,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 }
 
-func (c *Client) Publish(ctx context.Context, p Publish) (*protocol.AckPacket, error) {
+func (c *Client) Publish(ctx context.Context, p Publish) (*PublishResponse, error) {
 	packet, err := protocol.NewPublish(protocol.PublishOptions{
 		Qos:     byte(p.Qos),
 		Topic:   p.Topic,
@@ -335,7 +340,13 @@ func (c *Client) Publish(ctx context.Context, p Publish) (*protocol.AckPacket, e
 
 	select {
 	case resp := <-respChan:
-		return resp, nil
+		pr := &PublishResponse{
+			ReasonCode: resp.ReasonCode,
+		}
+		if resp.Properties != nil {
+			pr.ReasonString = resp.Properties.ReasonString
+		}
+		return pr, nil
 	case <-ctx.Done():
 		if c.session != nil {
 			c.session.remove(packetID)
