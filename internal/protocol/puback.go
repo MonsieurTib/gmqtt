@@ -5,7 +5,7 @@ import (
 )
 
 type PubAck struct {
-	AckPacket
+	PubAckPacket
 }
 
 func (pa *PubAck) Encode() (net.Buffers, error) {

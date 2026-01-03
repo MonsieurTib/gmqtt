@@ -524,7 +524,7 @@ func (c *Client) readLoop(ctx context.Context) {
 				c.safeClose()
 				return
 			case protocol.TypePubAck:
-				pubAck := &protocol.AckPacket{}
+				pubAck := &protocol.PubAckPacket{}
 				err := pubAck.Decode(c.conn)
 				if err != nil {
 					c.config.Logger.Error("failed to decode pubAck packet", "err", err)
@@ -553,7 +553,7 @@ func (c *Client) readLoop(ctx context.Context) {
 				}
 				c.sendPacket(ctx, pubRel)
 			case protocol.TypePubComp:
-				pubComp := &protocol.AckPacket{}
+				pubComp := &protocol.PubAckPacket{}
 				err := pubComp.Decode(c.conn)
 				if err != nil {
 					c.config.Logger.Error("failed to decode pubComp packet", "err", err)

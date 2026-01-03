@@ -6,7 +6,7 @@ import (
 )
 
 type PubRel struct {
-	AckPacket
+	PubAckPacket
 }
 
 func (ap *PubRel) Encode() (net.Buffers, error) {
@@ -24,9 +24,9 @@ func (ap *PubRel) Encode() (net.Buffers, error) {
 	return net.Buffers{buf.Bytes(), vHeader}, nil
 }
 
-func NewPubRel(packetID uint16, reasonCode byte, properties *AckProperties) (*PubRel, error) {
+func NewPubRel(packetID uint16, reasonCode byte, properties *PubAckProperties) (*PubRel, error) {
 	pubRel := &PubRel{
-		AckPacket: AckPacket{
+		PubAckPacket: PubAckPacket{
 			PacketID:   packetID,
 			ReasonCode: reasonCode,
 			Properties: properties,

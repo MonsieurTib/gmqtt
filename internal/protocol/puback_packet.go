@@ -6,12 +6,66 @@ import (
 	"io"
 )
 
-type AckProperties struct {
+type PubAckPacket struct {
+	PacketID   uint16
+	ReasonCode byte
+	Properties *PubAckProperties
+}
+
+type PubAckProperties struct {
 	ReasonString string
 	UserProperty []UserProperty
 }
 
-func (ap *AckProperties) Encode() ([]byte, error) {
+func (ap *PubAckPacket) GetPacketID() uint16 {
+	return ap.PacketID
+}
+
+func (ap *PubAckPacket) SetPacketID(packetID uint16) {
+	ap.PacketID = packetID
+}
+
+func (ap *PubAckPacket) Decode(reader io.Reader) error {
+	remainingLength, err := decodeVariableByteInteger(reader)
+	if err != nil {
+		return fmt.Errorf("error decoding remaining length on pubAckPacket: %w", err)
+	}
+
+	if remainingLength < 2 {
+		return fmt.Errorf("invalid pubAckPacket remaining length: %d", remainingLength)
+	}
+
+	buf := make([]byte, remainingLength)
+	if _, err := io.ReadFull(reader, buf); err != nil {
+		return fmt.Errorf("error reading pubAckPacket: %w", err)
+	}
+
+	dataBuf := bytes.NewBuffer(buf)
+
+	ap.PacketID, err = decodeUint16(dataBuf)
+	if err != nil {
+		return fmt.Errorf("error decoding packet id: %w", err)
+	}
+
+	if remainingLength > 2 {
+		ap.ReasonCode, err = dataBuf.ReadByte()
+		if err != nil {
+			return fmt.Errorf("error decoding reason code: %w", err)
+		}
+	}
+
+	if remainingLength > 3 {
+		ap.Properties = &PubAckProperties{}
+		err := ap.Properties.decode(dataBuf)
+		if err != nil {
+			return fmt.Errorf("error decoding pubAckProperties: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (ap *PubAckProperties) Encode() ([]byte, error) {
 	var propsBuf bytes.Buffer
 
 	if ap.ReasonString != "" {
@@ -41,7 +95,7 @@ func (ap *AckProperties) Encode() ([]byte, error) {
 	return finalBuf.Bytes(), nil
 }
 
-func (ap *AckProperties) decode(buf *bytes.Buffer) error {
+func (ap *PubAckProperties) decode(buf *bytes.Buffer) error {
 	propLen, err := decodeVariableByteIntegerFromBuffer(buf)
 	if err != nil {
 		return fmt.Errorf("error decoding properties length: %w", err)

@@ -12,7 +12,7 @@ import (
 
 type inflightMessage struct {
 	node     *collection.Node[protocol.PubPacket]
-	respChan chan *protocol.AckPacket
+	respChan chan *protocol.PubAckPacket
 	sentAt   time.Time
 }
 
@@ -49,7 +49,7 @@ func newSession(receiveMaximum uint16, logger *slog.Logger) *session {
 	return session
 }
 
-func (s *session) storePublish(p protocol.PubPacket) (uint16, chan *protocol.AckPacket, error) {
+func (s *session) storePublish(p protocol.PubPacket) (uint16, chan *protocol.PubAckPacket, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -61,7 +61,7 @@ func (s *session) storePublish(p protocol.PubPacket) (uint16, chan *protocol.Ack
 	p.SetPacketID(id)
 
 	node := s.inflightMessages.Add(p)
-	respChan := make(chan *protocol.AckPacket, 1)
+	respChan := make(chan *protocol.PubAckPacket, 1)
 
 	s.inflightMap[id] = &inflightMessage{
 		node:     node,
@@ -72,7 +72,7 @@ func (s *session) storePublish(p protocol.PubPacket) (uint16, chan *protocol.Ack
 	return id, respChan, nil
 }
 
-func (s *session) ack(packetID uint16, response *protocol.AckPacket) bool {
+func (s *session) ack(packetID uint16, response *protocol.PubAckPacket) bool {
 	s.mu.Lock()
 
 	msg, exists := s.inflightMap[packetID]
