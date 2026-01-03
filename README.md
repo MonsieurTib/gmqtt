@@ -4,9 +4,9 @@ MQTT v5 client implementation in Go, WIP (not production ready) and currently su
 - Will messages and connect properties
 - Qos 0/1/2message publishing
 - Session management
+- subscription management (subscribe only, unsub coming soon..)
 
 Not yet supported : 
-- subscription management
 - receiving messages
 - topic alias support
 - auto reconnect
