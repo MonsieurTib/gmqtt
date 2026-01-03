@@ -97,6 +97,17 @@ func main() {
 		log.Printf("Published successfully: %v", response)
 	}
 
+	subResp, err := client.Subscribe(ctx, gmqtt.Subscription{
+		TopicFilter: "hello/world",
+		QoS:         gmqtt.QoSAtLeastOnce,
+	})
+
+	if err != nil {
+		log.Printf("Failed to subscribe: %v", err)
+	} else {
+		log.Printf("Subscribed successfully, reason codes: %v", subResp.ReasonCodes)
+	}
+
 	time.Sleep(60 * time.Second)
 	fmt.Println("Disconnecting")
 	_ = client.Disconnect(ctx)

@@ -136,6 +136,19 @@ type PublishResponse struct {
 	ReasonString string
 }
 
+type Subscription struct {
+	TopicFilter       string
+	QoS               QoS
+	NoLocal           bool
+	RetainAsPublished bool
+	RetainHandling    byte
+}
+
+type SubscribeResponse struct {
+	ReasonCodes  map[string]byte
+	ReasonString string
+}
+
 type Client struct {
 	config        *ClientConfig
 	conn          net.Conn
@@ -355,6 +368,58 @@ func (c *Client) Publish(ctx context.Context, p Publish) (*PublishResponse, erro
 	}
 }
 
+func (c *Client) Subscribe(ctx context.Context, subscriptions ...Subscription) (*SubscribeResponse, error) {
+	if len(subscriptions) == 0 {
+		return nil, fmt.Errorf("at least one subscription is required")
+	}
+
+	subs := make([]protocol.Subscription, len(subscriptions))
+	for i, sub := range subscriptions {
+		subs[i] = protocol.Subscription{
+			TopicFilter:       sub.TopicFilter,
+			QoS:               byte(sub.QoS),
+			NoLocal:           sub.NoLocal,
+			RetainAsPublished: sub.RetainAsPublished,
+			RetainHandling:    sub.RetainHandling,
+		}
+	}
+
+	packet := &protocol.Subscribe{
+		Subscriptions: subs,
+	}
+
+	packetID, respChan, err := c.session.storeSubscribe(packet)
+	if err != nil {
+		return nil, err
+	}
+	c.config.Logger.Debug("subscribe stored", "packetID", packetID)
+
+	if err = c.sendPacket(ctx, packet); err != nil {
+		c.session.removeSubscribe(packetID)
+		return nil, err
+	}
+
+	select {
+	case resp := <-respChan:
+		reasonCodes := make(map[string]byte, len(subscriptions))
+		for i, sub := range subscriptions {
+			if i < len(resp.ReasonCodes) {
+				reasonCodes[sub.TopicFilter] = resp.ReasonCodes[i]
+			}
+		}
+		sr := &SubscribeResponse{
+			ReasonCodes: reasonCodes,
+		}
+		if resp.Properties != nil {
+			sr.ReasonString = resp.Properties.ReasonString
+		}
+		return sr, nil
+	case <-ctx.Done():
+		c.session.removeSubscribe(packetID)
+		return nil, fmt.Errorf("subscribe cancelled for packetID %d", packetID)
+	}
+}
+
 func (c *Client) sendPacket(ctx context.Context, p protocol.Packet) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -496,6 +561,15 @@ func (c *Client) readLoop(ctx context.Context) {
 				}
 				c.config.Logger.Debug("PubComp received", "packetID", pubComp.PacketID)
 				c.session.ack(pubComp.PacketID, pubComp)
+			case protocol.TypeSubAck:
+				subAck := &protocol.SubAck{}
+				err := subAck.Decode(c.conn)
+				if err != nil {
+					c.config.Logger.Error("failed to decode subAck packet", "err", err)
+					return
+				}
+				c.config.Logger.Debug("SubAck received", "packetID", subAck.PacketID, "reasonCodes", subAck.ReasonCodes)
+				c.session.ackSubscribe(subAck.PacketID, subAck)
 			default:
 				// TODO: Handle other packet types
 				c.config.Logger.Warn("unsupported packet type", "type", packetType[0]>>4)

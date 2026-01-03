@@ -507,6 +507,220 @@ func TestPublishConcurrent(t *testing.T) {
 	}
 }
 
+func TestSubscribe(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	ctx := context.Background()
+	container, err := setupEMQXContainer(ctx)
+	if err != nil {
+		t.Fatalf("Failed to setup EMQX container: %v", err)
+	}
+	defer func() {
+		_ = container.Terminate(ctx)
+	}()
+
+	tests := []struct {
+		name          string
+		subscriptions []Subscription
+		expectError   bool
+		expectedQoS   map[string]byte
+	}{
+		{
+			name: "single_topic_qos0",
+			subscriptions: []Subscription{
+				{TopicFilter: "test/sub/qos0", QoS: QoSAtMostOnce},
+			},
+			expectError: false,
+			expectedQoS: map[string]byte{"test/sub/qos0": 0x00},
+		},
+		{
+			name: "single_topic_qos1",
+			subscriptions: []Subscription{
+				{TopicFilter: "test/sub/qos1", QoS: QoSAtLeastOnce},
+			},
+			expectError: false,
+			expectedQoS: map[string]byte{"test/sub/qos1": 0x01},
+		},
+		{
+			name: "single_topic_qos2",
+			subscriptions: []Subscription{
+				{TopicFilter: "test/sub/qos2", QoS: QoSExactlyOnce},
+			},
+			expectError: false,
+			expectedQoS: map[string]byte{"test/sub/qos2": 0x02},
+		},
+		{
+			name: "multiple_topics",
+			subscriptions: []Subscription{
+				{TopicFilter: "test/multi/a", QoS: QoSAtMostOnce},
+				{TopicFilter: "test/multi/b", QoS: QoSAtLeastOnce},
+				{TopicFilter: "test/multi/c", QoS: QoSExactlyOnce},
+			},
+			expectError: false,
+			expectedQoS: map[string]byte{
+				"test/multi/a": 0x00,
+				"test/multi/b": 0x01,
+				"test/multi/c": 0x02,
+			},
+		},
+		{
+			name: "wildcard_plus",
+			subscriptions: []Subscription{
+				{TopicFilter: "test/+/wildcard", QoS: QoSAtLeastOnce},
+			},
+			expectError: false,
+			expectedQoS: map[string]byte{"test/+/wildcard": 0x01},
+		},
+		{
+			name: "wildcard_hash",
+			subscriptions: []Subscription{
+				{TopicFilter: "test/#", QoS: QoSAtLeastOnce},
+			},
+			expectError: false,
+			expectedQoS: map[string]byte{"test/#": 0x01},
+		},
+		{
+			name: "with_no_local",
+			subscriptions: []Subscription{
+				{TopicFilter: "test/nolocal", QoS: QoSAtLeastOnce, NoLocal: true},
+			},
+			expectError: false,
+			expectedQoS: map[string]byte{"test/nolocal": 0x01},
+		},
+		{
+			name: "with_retain_as_published",
+			subscriptions: []Subscription{
+				{TopicFilter: "test/retain", QoS: QoSAtLeastOnce, RetainAsPublished: true},
+			},
+			expectError: false,
+			expectedQoS: map[string]byte{"test/retain": 0x01},
+		},
+		{
+			name: "with_retain_handling",
+			subscriptions: []Subscription{
+				{TopicFilter: "test/retainhandling", QoS: QoSAtLeastOnce, RetainHandling: 1},
+			},
+			expectError: false,
+			expectedQoS: map[string]byte{"test/retainhandling": 0x01},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &ClientConfig{
+				Broker:     container.MQTTURI,
+				ClientID:   fmt.Sprintf("test-subscribe-%s", tt.name),
+				KeepAlive:  60 * time.Second,
+				CleanStart: true,
+				Logger:     slog.Default(),
+			}
+
+			client, err := NewClient(config)
+			if err != nil {
+				t.Fatalf("Failed to create client: %v", err)
+			}
+
+			connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+
+			if err := client.Connect(connectCtx); err != nil {
+				t.Fatalf("Failed to connect: %v", err)
+			}
+			defer client.Disconnect(ctx)
+
+			subscribeCtx, subscribeCancel := context.WithTimeout(ctx, 5*time.Second)
+			defer subscribeCancel()
+
+			resp, err := client.Subscribe(subscribeCtx, tt.subscriptions...)
+
+			if tt.expectError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Expected no error but got: %v", err)
+			}
+
+			if !tt.expectError && resp != nil {
+				if len(resp.ReasonCodes) != len(tt.expectedQoS) {
+					t.Errorf("Expected %d reason codes, got %d", len(tt.expectedQoS), len(resp.ReasonCodes))
+				}
+				for topic, expectedCode := range tt.expectedQoS {
+					if code, ok := resp.ReasonCodes[topic]; !ok {
+						t.Errorf("Missing reason code for topic %s", topic)
+					} else if code != expectedCode {
+						t.Errorf("Topic %s: expected QoS %d, got %d", topic, expectedCode, code)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSubscribeConcurrent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	ctx := context.Background()
+	container, err := setupEMQXContainer(ctx)
+	if err != nil {
+		t.Fatalf("Failed to setup EMQX container: %v", err)
+	}
+	defer func() {
+		_ = container.Terminate(ctx)
+	}()
+
+	config := &ClientConfig{
+		Broker:     container.MQTTURI,
+		ClientID:   "test-concurrent-subscriber",
+		KeepAlive:  60 * time.Second,
+		CleanStart: true,
+	}
+
+	client, err := NewClient(config)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	if err := client.Connect(connectCtx); err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer client.Disconnect(ctx)
+
+	numSubscribes := 20
+	done := make(chan error, numSubscribes)
+
+	for i := range numSubscribes {
+		go func(subNum int) {
+			subscribeCtx, subscribeCancel := context.WithTimeout(ctx, 10*time.Second)
+			defer subscribeCancel()
+
+			_, err := client.Subscribe(subscribeCtx, Subscription{
+				TopicFilter: fmt.Sprintf("test/concurrent/%d", subNum),
+				QoS:         QoSAtLeastOnce,
+			})
+			done <- err
+		}(i)
+	}
+
+	failed := 0
+	for i := range numSubscribes {
+		if err := <-done; err != nil {
+			t.Errorf("Subscribe %d failed: %v", i, err)
+			failed++
+		}
+	}
+
+	if failed > 0 {
+		t.Errorf("%d out of %d concurrent subscribes failed", failed, numSubscribes)
+	}
+}
+
 func BenchmarkPublish(b *testing.B) {
 	ctx := context.Background()
 	container, err := setupEMQXContainer(ctx)

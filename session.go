@@ -16,13 +16,19 @@ type inflightMessage struct {
 	sentAt   time.Time
 }
 
+type inflightSubscribe struct {
+	respChan chan *protocol.SubAck
+	sentAt   time.Time
+}
+
 type session struct {
-	inflightMessages *collection.DoubleLinkedList[protocol.PubPacket]
-	inflightMap      map[uint16]*inflightMessage
-	nextID           uint16
-	mu               sync.Mutex
-	receiveMaximum   uint16
-	logger           *slog.Logger
+	inflightMessages   *collection.DoubleLinkedList[protocol.PubPacket]
+	inflightMap        map[uint16]*inflightMessage
+	inflightSubscribes map[uint16]*inflightSubscribe
+	nextID             uint16
+	mu                 sync.Mutex
+	receiveMaximum     uint16
+	logger             *slog.Logger
 }
 
 func newSession(receiveMaximum uint16, logger *slog.Logger) *session {
@@ -32,11 +38,12 @@ func newSession(receiveMaximum uint16, logger *slog.Logger) *session {
 	}
 
 	session := &session{
-		inflightMessages: &collection.DoubleLinkedList[protocol.PubPacket]{},
-		inflightMap:      make(map[uint16]*inflightMessage, max),
-		nextID:           1,
-		receiveMaximum:   max,
-		logger:           logger,
+		inflightMessages:   &collection.DoubleLinkedList[protocol.PubPacket]{},
+		inflightMap:        make(map[uint16]*inflightMessage, max),
+		inflightSubscribes: make(map[uint16]*inflightSubscribe),
+		nextID:             1,
+		receiveMaximum:     max,
+		logger:             logger,
 	}
 
 	return session
@@ -122,6 +129,58 @@ func (s *session) remove(packetID uint16) {
 	delete(s.inflightMap, packetID)
 }
 
+func (s *session) storeSubscribe(sub *protocol.Subscribe) (uint16, chan *protocol.SubAck, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	id := s.allocID()
+	sub.PacketID = id
+
+	respChan := make(chan *protocol.SubAck, 1)
+	s.inflightSubscribes[id] = &inflightSubscribe{
+		respChan: respChan,
+		sentAt:   time.Now(),
+	}
+
+	return id, respChan, nil
+}
+
+func (s *session) ackSubscribe(packetID uint16, response *protocol.SubAck) bool {
+	s.mu.Lock()
+
+	pending, exists := s.inflightSubscribes[packetID]
+	if !exists {
+		s.mu.Unlock()
+		s.logger.Warn("suback received for unknown packet id", "packet_id", packetID)
+		return false
+	}
+
+	delete(s.inflightSubscribes, packetID)
+	s.mu.Unlock()
+
+	pending.respChan <- response
+	close(pending.respChan)
+
+	s.logger.Debug("subscribe acknowledged",
+		"packet_id", packetID,
+		"duration_ms", time.Since(pending.sentAt).Milliseconds())
+
+	return true
+}
+
+func (s *session) removeSubscribe(packetID uint16) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	pending, exists := s.inflightSubscribes[packetID]
+	if !exists {
+		return
+	}
+
+	close(pending.respChan)
+	delete(s.inflightSubscribes, packetID)
+}
+
 func (s *session) allocID() uint16 {
 	for {
 		id := s.nextID
@@ -129,7 +188,9 @@ func (s *session) allocID() uint16 {
 		if s.nextID > s.receiveMaximum {
 			s.nextID = 1
 		}
-		if _, used := s.inflightMap[id]; !used {
+		_, usedInflight := s.inflightMap[id]
+		_, usedSubscribe := s.inflightSubscribes[id]
+		if !usedInflight && !usedSubscribe {
 			return id
 		}
 	}
@@ -142,6 +203,11 @@ func (s *session) cleanup() {
 	for id, msg := range s.inflightMap {
 		close(msg.respChan)
 		delete(s.inflightMap, id)
+	}
+
+	for id, pending := range s.inflightSubscribes {
+		close(pending.respChan)
+		delete(s.inflightSubscribes, id)
 	}
 
 	s.inflightMessages = &collection.DoubleLinkedList[protocol.PubPacket]{}
