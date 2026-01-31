@@ -149,6 +149,11 @@ type SubscribeResponse struct {
 	ReasonString string
 }
 
+type UnsubscribeResponse struct {
+	ReasonCodes  map[string]byte
+	ReasonString string
+}
+
 type Client struct {
 	config        *ClientConfig
 	conn          net.Conn
@@ -420,6 +425,47 @@ func (c *Client) Subscribe(ctx context.Context, subscriptions ...Subscription) (
 	}
 }
 
+func (c *Client) Unsubscribe(ctx context.Context, topicFilters ...string) (*UnsubscribeResponse, error) {
+	if len(topicFilters) == 0 {
+		return nil, fmt.Errorf("at least one topic filter is required")
+	}
+
+	packet := &protocol.UnSubscribe{
+		TopicFilters: topicFilters,
+	}
+
+	packetID, respChan, err := c.session.storeUnsubscribe(packet)
+	if err != nil {
+		return nil, err
+	}
+	c.config.Logger.Debug("unsubscribe stored", "packetID", packetID)
+
+	if err = c.sendPacket(ctx, packet); err != nil {
+		c.session.removeUnsubscribe(packetID)
+		return nil, err
+	}
+
+	select {
+	case resp := <-respChan:
+		reasonCodes := make(map[string]byte, len(topicFilters))
+		for i, topic := range topicFilters {
+			if i < len(resp.ReasonCodes) {
+				reasonCodes[topic] = resp.ReasonCodes[i]
+			}
+		}
+		ur := &UnsubscribeResponse{
+			ReasonCodes: reasonCodes,
+		}
+		if resp.Properties != nil {
+			ur.ReasonString = resp.Properties.ReasonString
+		}
+		return ur, nil
+	case <-ctx.Done():
+		c.session.removeUnsubscribe(packetID)
+		return nil, fmt.Errorf("unsubscribe cancelled for packetID %d", packetID)
+	}
+}
+
 func (c *Client) sendPacket(ctx context.Context, p protocol.Packet) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -570,8 +616,16 @@ func (c *Client) readLoop(ctx context.Context) {
 				}
 				c.config.Logger.Debug("SubAck received", "packetID", subAck.PacketID, "reasonCodes", subAck.ReasonCodes)
 				c.session.ackSubscribe(subAck.PacketID, subAck)
+			case protocol.TypeUnSubAck:
+				unSubAck := &protocol.UnSubAck{}
+				err := unSubAck.Decode(c.conn)
+				if err != nil {
+					c.config.Logger.Error("failed to decode unSubAck packet", "err", err)
+					return
+				}
+				c.config.Logger.Debug("UnSubAck received", "packetID", unSubAck.PacketID, "reasonCodes", unSubAck.ReasonCodes)
+				c.session.ackUnsubscribe(unSubAck.PacketID, unSubAck)
 			default:
-				// TODO: Handle other packet types
 				c.config.Logger.Warn("unsupported packet type", "type", packetType[0]>>4)
 			}
 		}
