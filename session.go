@@ -27,14 +27,14 @@ type inflightUnsubscribe struct {
 }
 
 type session struct {
-	inflightMessages      *collection.DoubleLinkedList[protocol.PubPacket]
-	inflightMap           map[uint16]*inflightMessage
-	inflightSubscribes    map[uint16]*inflightSubscribe
-	inflightUnsubscribes  map[uint16]*inflightUnsubscribe
-	nextID                uint16
-	mu                    sync.Mutex
-	receiveMaximum        uint16
-	logger                *slog.Logger
+	inflightMessages     *collection.DoubleLinkedList[protocol.PubPacket]
+	inflightMap          map[uint16]*inflightMessage
+	inflightSubscribes   map[uint16]*inflightSubscribe
+	inflightUnsubscribes map[uint16]*inflightUnsubscribe
+	nextID               uint16
+	mu                   sync.Mutex
+	receiveMaximum       uint16
+	logger               *slog.Logger
 }
 
 func newSession(receiveMaximum uint16, logger *slog.Logger) *session {
@@ -284,10 +284,36 @@ func (s *session) getInflightMessages() []protocol.PubPacket {
 
 	messages := make([]protocol.PubPacket, 0, s.inflightMessages.Count())
 
+	now := time.Now()
 	current := s.inflightMessages.Head
 	for current != nil {
-		messages = append(messages, current.Data())
-		current = current.Next()
+		next := current.Next()
+		packet := current.Data()
+
+		if pub, ok := packet.(*protocol.Publish); ok {
+			props := pub.Properties()
+			if props != nil && props.MessageExpiryInterval != nil {
+				packetID := pub.GetPacketID()
+				msg := s.inflightMap[packetID]
+				elapsed := uint32(now.Sub(msg.sentAt).Seconds())
+
+				if elapsed >= *props.MessageExpiryInterval {
+					s.logger.Info("dropping expired inflight message",
+						"packet_id", packetID,
+						"expiry_interval", *props.MessageExpiryInterval,
+						"elapsed_seconds", elapsed)
+
+					s.inflightMessages.Remove(current)
+					close(msg.respChan)
+					delete(s.inflightMap, packetID)
+					current = next
+					continue
+				}
+			}
+		}
+
+		messages = append(messages, packet)
+		current = next
 	}
 
 	return messages

@@ -85,6 +85,10 @@ func (p *Publish) MarkAsDuplicated() {
 	p.duplicate = true
 }
 
+func (p *Publish) Properties() *PublishProperties {
+	return p.publishProperties
+}
+
 func (p *Publish) Encode() (net.Buffers, error) {
 	var buf bytes.Buffer
 	var header byte

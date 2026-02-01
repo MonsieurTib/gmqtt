@@ -124,11 +124,23 @@ type WillProperties struct {
 	UserProperties         []UserProperty
 }
 
+type PublishProperties struct {
+	PayloadFormatIndicator *bool
+	MessageExpiryInterval  *uint32
+	TopicAlias             *uint16
+	ResponseTopic          string
+	CorrelationData        []byte
+	UserProperties         []UserProperty
+	SubscriptionIdentifier *uint32
+	ContentType            string
+}
+
 type Publish struct {
-	Qos     QoS
-	Topic   string
-	Payload []byte
-	Retain  bool
+	Qos        QoS
+	Topic      string
+	Payload    []byte
+	Retain     bool
+	Properties *PublishProperties
 }
 
 type PublishResponse struct {
@@ -331,10 +343,11 @@ func (c *Client) Connect(ctx context.Context) error {
 
 func (c *Client) Publish(ctx context.Context, p Publish) (*PublishResponse, error) {
 	packet, err := protocol.NewPublish(protocol.PublishOptions{
-		Qos:     byte(p.Qos),
-		Topic:   p.Topic,
-		Payload: p.Payload,
-		Retain:  p.Retain,
+		Qos:               byte(p.Qos),
+		Topic:             p.Topic,
+		Payload:           p.Payload,
+		Retain:            p.Retain,
+		PublishProperties: convertPublishProperties(p.Properties),
 	})
 	if err != nil {
 		return nil, err
@@ -730,6 +743,31 @@ func convertConnectProperties(cp *ConnectProperties) *protocol.ConnectProperties
 	}
 
 	return result
+}
+
+func convertPublishProperties(pp *PublishProperties) *protocol.PublishProperties {
+	if pp == nil {
+		return nil
+	}
+
+	var userProps []protocol.UserProperty
+	for _, up := range pp.UserProperties {
+		userProps = append(userProps, protocol.UserProperty{
+			Key:   up.Key,
+			Value: up.Value,
+		})
+	}
+
+	return &protocol.PublishProperties{
+		PayloadFormatIndicator: pp.PayloadFormatIndicator,
+		MessageExpiryInterval:  pp.MessageExpiryInterval,
+		TopicAlias:             pp.TopicAlias,
+		ResponseTopic:          pp.ResponseTopic,
+		CorrelationData:        pp.CorrelationData,
+		UserProperty:           userProps,
+		SubscriptionIdentifier: pp.SubscriptionIdentifier,
+		ContentType:            pp.ContentType,
+	}
 }
 
 func convertWillProperties(wp *WillProperties) *protocol.WillProperties {
