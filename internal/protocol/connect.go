@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"unicode/utf8"
 )
 
 const (
@@ -91,6 +92,17 @@ func NewConnect(opt ConnectOptions) *Connect {
 	}
 
 	return c
+}
+
+func (c *Connect) Validate() error {
+	if c.willFlag && c.willProperties != nil &&
+		c.willProperties.PayloadFormatIndicator != nil &&
+		*c.willProperties.PayloadFormatIndicator {
+		if !utf8.ValidString(c.willMessage) {
+			return fmt.Errorf("invalid will message: PayloadFormatIndicator is true but message is not valid UTF-8")
+		}
+	}
+	return nil
 }
 
 func (c *Connect) Encode() (net.Buffers, error) {

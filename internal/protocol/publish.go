@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -64,6 +65,14 @@ func NewPublish(opt PublishOptions) (*Publish, error) {
 	}
 	if strings.ContainsAny(opt.Topic, "+#") {
 		return nil, fmt.Errorf("invalid topic name: wildcards not allowed in PUBLISH")
+	}
+
+	if opt.PublishProperties != nil &&
+		opt.PublishProperties.PayloadFormatIndicator != nil &&
+		*opt.PublishProperties.PayloadFormatIndicator {
+		if !utf8.Valid(opt.Payload) {
+			return nil, fmt.Errorf("invalid payload: PayloadFormatIndicator is true but payload is not valid UTF-8")
+		}
 	}
 
 	return publish, nil

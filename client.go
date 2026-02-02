@@ -254,6 +254,10 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 
 	connect := protocol.NewConnect(options)
+	if err := connect.Validate(); err != nil {
+		c.close()
+		return fmt.Errorf("connect validation failed: %w", err)
+	}
 	packet, err := connect.Encode()
 	if err != nil {
 		c.close()
